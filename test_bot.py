@@ -159,6 +159,29 @@ class BotTests(unittest.TestCase):
             bot.process(self.db, FakeX({'10': p}), 'bot', 'grook', True, lambda *_: self.fail('Budget exhausted'))
         self.assertEqual(self.state(), 'pending')
 
+    def test_structured_final_after_search_commentary(self):
+        response = {'status': 'completed', 'output': [
+            {'type': 'message', 'content': [{'type': 'output_text', 'text': 'Checking sources...'}]},
+            {'type': 'web_search_call'},
+            {'type': 'message', 'content': [{'type': 'output_text', 'text': '{"action":"reply","text":"Verified answer."}'}]}]}
+        self.assertEqual(bot.parse_reply(response), 'Verified answer.')
+
+    def test_model_output_errors_are_safe(self):
+        for response, reason in [
+            ({'status': 'incomplete'}, 'incomplete_response'),
+            ({'output': []}, 'missing_final_text'),
+            ({'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': 'not json'}]}]}, 'invalid_final_json')]:
+            with self.assertRaises(bot.ModelOutputError) as error:
+                bot.parse_reply(response)
+            self.assertEqual(error.exception.reason, reason)
+
+    def test_draft_requests_enforced_schema(self):
+        response = {'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': '{"action":"skip","text":""}'}]}]}
+        with patch.dict('os.environ', {'XAI_API_KEY': 'test-only'}), patch('bot.request', return_value=response) as req:
+            self.assertIsNone(bot.draft({'posts': []}, 'grook'))
+        self.assertEqual(req.call_args.args[3]['text']['format']['type'], 'json_schema')
+        self.assertTrue(req.call_args.args[3]['text']['format']['strict'])
+
     def test_long_post_text(self):
         self.assertEqual(bot.text_of({'text': 'short', 'note_tweet': {'text': 'full'}}), 'full')
 

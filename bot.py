@@ -164,27 +164,53 @@ def valid_text(text):
     return weight <= 280 and not any(ord(c) < 32 and c not in '\n\t' for c in text)
 
 
+class ModelOutputError(ValueError):
+    """Safe error metadata only; never log model content or credentials."""
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def parse_reply(response):
+    if response.get('status') not in (None, 'completed'):
+        raise ModelOutputError('incomplete_response')
+    messages = [item for item in response.get('output', []) if item.get('type') == 'message']
+    # Search can produce commentary before the final answer. Do not concatenate it.
+    output = ''.join(c.get('text', '') for c in (messages[-1].get('content', []) if messages else [])
+                     if c.get('type') == 'output_text').strip()
+    if not output:
+        raise ModelOutputError('missing_final_text')
+    output = re.sub(r'^```(?:json)?\s*|\s*```$', '', output)
+    try:
+        answer = json.loads(output)
+    except json.JSONDecodeError:
+        raise ModelOutputError('invalid_final_json') from None
+    if not isinstance(answer, dict):
+        raise ModelOutputError('invalid_final_object')
+    if answer.get('action') == 'skip':
+        return None
+    text = answer.get('text')
+    if answer.get('action') != 'reply' or not valid_text(text):
+        raise ModelOutputError('invalid_reply_text')
+    return text.strip()
+
+
 def draft(ctx, handle):
     prompt = (HERE / 'voice.txt').read_text()
+    schema = {'type': 'object', 'properties': {
+        'action': {'type': 'string', 'enum': ['reply', 'skip']},
+        'text': {'type': 'string'}}, 'required': ['action', 'text'], 'additionalProperties': False}
     payload = {'model': os.getenv('XAI_MODEL') or 'grok-4.20-0309-non-reasoning',
-               'instructions': prompt + f'\nYour handle is @{handle}. Current UTC time: {dt.datetime.now(dt.timezone.utc).isoformat()}',
+               'instructions': prompt + f'\nYour handle is @{handle}. Current UTC time: {dt.datetime.now(dt.timezone.utc).isoformat()}'
+                   + '\nFor a skip, return action skip and text as an empty string.',
                'input': [{'role': 'user', 'content': json.dumps(ctx)}],
                'tools': [{'type': 'web_search'}, {'type': 'x_search', 'enable_image_understanding': True}],
+               'text': {'format': {'type': 'json_schema', 'name': 'grook_reply',
+                                   'strict': True, 'schema': schema}},
                'max_output_tokens': 1200, 'max_turns': 3, 'store': False}
     response = request('POST', 'https://api.x.ai/v1/responses',
                        {'Authorization': 'Bearer ' + required('XAI_API_KEY')}, payload, timeout=120)
-    if response.get('status') not in (None, 'completed'):
-        raise ValueError('Incomplete model response')
-    output = ''.join(c.get('text', '') for item in response.get('output', []) if item.get('type') == 'message'
-                     for c in item.get('content', []) if c.get('type') == 'output_text').strip()
-    output = re.sub(r'^```(?:json)?\s*|\s*```$', '', output)
-    answer = json.loads(output)
-    if answer.get('action') == 'skip':
-        return None
-    text = answer.get('text', '').strip()
-    if answer.get('action') != 'reply' or not valid_text(text):
-        raise ValueError('Model output did not pass reply validation')
-    return text
+    return parse_reply(response)
 
 
 def database(path):
@@ -312,7 +338,8 @@ def process(db, x, uid, handle, live, generate=draft):
                     db.execute('UPDATE jobs SET attempts=?, next_try=?, status=? WHERE id=?',
                                (attempts, time.time()+delay, 'failed' if attempts >= 5 else 'pending', jid))
             print(json.dumps({'mention': jid, 'error_type': type(exc).__name__,
-                              'http_status': getattr(exc, 'status', None)}), flush=True)
+                              'http_status': getattr(exc, 'status', None),
+                              'reason': getattr(exc, 'reason', None)}), flush=True)
             if isinstance(exc, ApiError) and exc.status in (401, 402, 403, 429):
                 raise
 
@@ -354,7 +381,8 @@ def main():
                 ingest(db, x, me['id'])
                 process(db, x, me['id'], expected, live)
             except Exception as exc:
-                print(json.dumps({'error_type': type(exc).__name__, 'http_status': getattr(exc, 'status', None)}), flush=True)
+                print(json.dumps({'error_type': type(exc).__name__, 'http_status': getattr(exc, 'status', None),
+                              'reason': getattr(exc, 'reason', None)}), flush=True)
                 if args.once or isinstance(exc, ApiError) and exc.status in (401, 402, 403):
                     raise SystemExit(1)
                 delay = max(delay, getattr(exc, 'retry', 60))

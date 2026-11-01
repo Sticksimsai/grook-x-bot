@@ -1,0 +1,38 @@
+services:
+  - type: worker
+    name: grook-x-bot
+    runtime: docker
+    plan: 0.5c-512mb
+    numInstances: 1
+    autoDeployTrigger: commit
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    disk:
+      name: grook-state
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: X_BOT_HANDLE
+        value: grook
+      - key: X_BOT_LIVE
+        value: "false"
+      - key: X_AI_REPLY_APPROVED
+        value: "false"
+      - key: MAX_REPLIES_PER_DAY
+        value: "10"
+      - key: POLL_SECONDS
+        value: "60"
+      - key: XAI_MODEL
+        value: grok-4.20-0309-non-reasoning
+      - key: X_API_KEY
+        sync: false
+      - key: X_API_SECRET
+        sync: false
+      - key: X_ACCESS_TOKEN
+        sync: false
+      - key: X_ACCESS_TOKEN_SECRET
+        sync: false
+      - key: XAI_API_KEY
+        sync: false

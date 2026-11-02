@@ -182,6 +182,27 @@ class BotTests(unittest.TestCase):
         self.assertEqual(req.call_args.args[3]['text']['format']['type'], 'json_schema')
         self.assertTrue(req.call_args.args[3]['text']['format']['strict'])
 
+    def test_invalid_draft_is_rewritten_once_without_tools(self):
+        def response(text):
+            return {'output': [{'type': 'message', 'content': [{'type': 'output_text',
+                    'text': json.dumps({'action': 'reply', 'text': text})}]}]}
+        with patch.dict('os.environ', {'XAI_API_KEY': 'test-only'}), patch('bot.request',
+                side_effect=[response('x' * 300), response('Short, qualified answer.')]) as req:
+            self.assertEqual(bot.draft({'posts': []}, 'grook'), 'Short, qualified answer.')
+        self.assertEqual(req.call_count, 2)
+        repair = req.call_args_list[1].args[3]
+        self.assertNotIn('tools', repair)
+        self.assertEqual(json.loads(repair['input'][0]['content'])['validation_error'], 'reply_too_long')
+
+    def test_invalid_rewrite_is_rejected_without_loop(self):
+        response = {'output': [{'type': 'message', 'content': [{'type': 'output_text',
+                   'text': json.dumps({'action': 'reply', 'text': '@someone answer'})}]}]}
+        with patch.dict('os.environ', {'XAI_API_KEY': 'test-only'}), patch('bot.request', return_value=response) as req:
+            with self.assertRaises(bot.ModelOutputError) as error:
+                bot.draft({'posts': []}, 'grook')
+            self.assertEqual(error.exception.reason, 'mentions_not_allowed')
+        self.assertEqual(req.call_count, 2)
+
     def test_long_post_text(self):
         self.assertEqual(bot.text_of({'text': 'short', 'note_tweet': {'text': 'full'}}), 'full')
 

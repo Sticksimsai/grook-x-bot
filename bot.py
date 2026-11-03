@@ -496,6 +496,21 @@ def main():
         db.commit()
         print(f"Grook @{expected}: {'LIVE' if live else 'PREVIEW'}", flush=True)
         print("Daily reply cap: " + os.getenv('MAX_REPLIES_PER_DAY', '50'), flush=True)
+        if not live and meta(db, 'relevance_smoke_version') != '1':
+            # Preview-only model check. Synthetic inputs never become jobs or X posts.
+            sample = {'mention_id': 'smoke-identity', 'current_question': '@grook what is this account?',
+                      'immediate_parent_id': 'smoke-parent', 'missing_post_ids': [],
+                      'posts': [{'id': 'smoke-identity', 'text': '@grook what is this account?'},
+                                {'id': 'smoke-parent', 'text': 'Grook is an independent automated reply account, not an official xAI product.'}]}
+            wrong = 'No, Dahomey lost to the Egba at Abeokuta in 1851 and 1864.'
+            if review_reply(sample, wrong, expected):
+                raise ValueError('Relevance smoke check accepted an unrelated historical answer')
+            candidate = reviewed_draft(sample, expected)
+            if not candidate:
+                raise ValueError('Relevance smoke check failed to produce a relevant account explanation')
+            print(json.dumps({'relevance_smoke': 'passed', 'preview': candidate}), flush=True)
+            meta(db, 'relevance_smoke_version', '1')
+            db.commit()
         while True:
             delay = max(30, int(os.getenv('POLL_SECONDS', '60')))
             try:

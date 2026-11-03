@@ -17,7 +17,7 @@ services:
       - key: X_BOT_HANDLE
         value: grook
       - key: X_BOT_LIVE
-        value: "false"
+        value: "true"
       - key: X_AI_REPLY_APPROVED
         value: "true"
       - key: MAX_REPLIES_PER_DAY

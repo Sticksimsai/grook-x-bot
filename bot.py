@@ -39,9 +39,9 @@ def required(name):
 
 
 class ApiError(Exception):
-    def __init__(self, status, retry=60):
-        super().__init__(f'API HTTP {status}')  # Do not log response bodies or secrets.
-        self.status, self.retry = status, retry
+    def __init__(self, status, retry=60, reason=None):
+        super().__init__(f'API HTTP {status}')
+        self.status, self.retry, self.reason = status, retry, reason
 
 
 def request(method, url, headers, body=None, timeout=45):
@@ -54,7 +54,28 @@ def request(method, url, headers, body=None, timeout=45):
     except urllib.error.HTTPError as exc:
         reset = exc.headers.get('x-rate-limit-reset', '')
         retry = max(60, int(reset) - int(time.time())) if reset.isdigit() else 60
-        raise ApiError(exc.code, retry) from None
+        # Record only the provider's error explanation, never headers or request bodies.
+        try:
+            error = json.loads(exc.read(8192))
+            nested = error.get('error', {})
+            detail = error.get('detail') or error.get('title') or error.get('message')
+            if not detail and isinstance(nested, dict):
+                detail = nested.get('message') or nested.get('code')
+            if not detail and isinstance(nested, str):
+                detail = nested
+            detail = str(detail or 'request_rejected')
+        except (ValueError, AttributeError):
+            detail = 'request_rejected'
+        for name in ('X_API_KEY', 'X_API_SECRET', 'X_ACCESS_TOKEN',
+                     'X_ACCESS_TOKEN_SECRET', 'XAI_API_KEY'):
+            secret = os.getenv(name, '')
+            if secret:
+                detail = detail.replace(secret, '[redacted]')
+        detail = re.sub(r'https?://\\S+', '[url]', detail)
+        provider = urllib.parse.urlsplit(url).hostname
+        endpoint = urllib.parse.urlsplit(url).path
+        reason = f'{provider} {method} {endpoint}: {detail[:400]}'
+        raise ApiError(exc.code, retry, reason) from None
 
 
 def oauth_header(method, url, key, secret, token, token_secret, nonce=None, timestamp=None):

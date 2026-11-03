@@ -89,7 +89,7 @@ class BotTests(unittest.TestCase):
         p = post('9', text='claim', parent='8')
         p['referenced_tweets'].append({'id': '7', 'type': 'quoted'})
         ctx = bot.context(FakeX({'9': p, '7': post('7'), '1': post('1')}), m)
-        self.assertEqual([p['id'] for p in ctx['posts']], ['10', '9', '7', '1'])
+        self.assertEqual([p['id'] for p in ctx['posts']], ['10', '9', '7'])
         self.assertEqual(ctx['missing_post_ids'], ['8'])
 
     def test_direct_mentions_only(self):
@@ -218,5 +218,58 @@ class BotTests(unittest.TestCase):
         self.assertEqual(bot.text_of({'text': 'short', 'note_tweet': {'text': 'full'}}), 'full')
 
 
+    def test_other_bot_is_not_a_summons(self):
+        self.assertFalse(bot.directed(post(text='@grook @grok what is this? Grook'), 'grook', 'bot'))
+        self.assertFalse(bot.directed(post(text='@grok what is this? Grook'), 'grook', 'bot'))
+
+    def test_old_history_does_not_replace_latest_question(self):
+        m = post('10', text='@grook what is this account?', parent='9')
+        ctx = bot.context(FakeX({'9': post('9', text='An independent reply bot.', parent='8'),
+                                '8': post('8', text='Did Dahomey defeat the Yoruba?')}), m)
+        self.assertEqual(ctx['current_question'], m['text'])
+        self.assertEqual(ctx['immediate_parent_id'], '9')
+        self.assertNotIn('Dahomey', json.dumps(ctx))
+
+    def test_duplicate_across_different_people_is_blocked(self):
+        p = post(); self.add(p)
+        text = 'Dahomey lost at Abeokuta in 1851 and 1864. The historical record is more complex than a single victory.'
+        self.db.execute("INSERT INTO jobs(id,author,payload,status,text,updated) VALUES(?,?,?,?,?,?)",
+                        ('9', 'other', '{}', 'sent', text, __import__('time').time()))
+        self.db.commit()
+        x = FakeX({'10': p})
+        bot.process(self.db, x, 'bot', 'grook', True, lambda *_: text.replace('lost', 'was defeated'))
+        self.assertEqual(self.state(), 'duplicate_blocked')
+        self.assertFalse(x.sent)
+        self.assertFalse(bot.repeated_reply(self.db, 'I am an independent automated reply account.'))
+
+    def test_relevance_review_binds_target_and_fails_closed(self):
+        def response(mid, approve=True, reason='relevant'):
+            return {'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': json.dumps(
+                {'mention_id': mid, 'approve': approve, 'reason': reason})}]}]}
+        ctx = {'mention_id': '10', 'current_question': 'What is this account?'}
+        with patch.dict('os.environ', {'XAI_API_KEY': 'test-only'}), patch('bot.request', side_effect=[
+                response('10', False, 'wrong_question'), response('11'), response('10'), {'status': 'incomplete'}]):
+            self.assertFalse(bot.review_reply(ctx, 'Historical answer.', 'grook'))
+            self.assertFalse(bot.review_reply(ctx, 'Correct but wrong target.', 'grook'))
+            self.assertTrue(bot.review_reply(ctx, 'Independent reply bot.', 'grook'))
+            with self.assertRaises(bot.ModelOutputError):
+                bot.review_reply(ctx, 'answer', 'grook')
+
+    def test_default_pipeline_reviews_before_posting(self):
+        p = post(); self.add(p); x = FakeX({'10': p})
+        with patch('bot.draft', return_value='Wrong topic.'), patch('bot.review_reply', return_value=False) as review:
+            bot.process(self.db, x, 'bot', 'grook', True)
+        review.assert_called_once()
+        self.assertEqual(self.state(), 'skipped')
+        self.assertFalse(x.sent)
+
+    def test_api_rejects_wrong_post_identity(self):
+        x = object.__new__(bot.X)
+        with patch.object(x, 'call', return_value={'data': post('11')}):
+            with self.assertRaises(ValueError):
+                x.post('10')
+
+
 if __name__ == '__main__':
     unittest.main()
+

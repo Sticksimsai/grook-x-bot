@@ -318,7 +318,8 @@ def process(db, x, uid, handle, live, generate=draft):
                     db.execute('DELETE FROM optouts WHERE author=?', (job['author'],))
             set_status(db, job['id'], 'command')
     used = db.execute("SELECT count(*) FROM jobs WHERE status IN ('sent','sending','uncertain','draft') AND updated>?", (now-86400,)).fetchone()[0]
-    budget = max(0, int(os.getenv('MAX_REPLIES_PER_DAY', '50')) - used)
+    limit = os.getenv('MAX_REPLIES_PER_DAY', '50').strip().lower()
+    budget = float('inf') if limit == 'unlimited' else max(0, int(limit) - used)
     for job in db.execute("SELECT * FROM jobs WHERE status='pending' AND next_try<=? ORDER BY length(id),id", (now,)).fetchall():
         if budget <= 0:
             break
@@ -408,6 +409,7 @@ def main():
         meta(db, 'account', me['id'])
         db.commit()
         print(f"Grook @{expected}: {'LIVE' if live else 'PREVIEW'}", flush=True)
+        print("Daily reply cap: " + os.getenv('MAX_REPLIES_PER_DAY', '50'), flush=True)
         while True:
             delay = max(30, int(os.getenv('POLL_SECONDS', '60')))
             try:

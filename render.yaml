@@ -21,7 +21,7 @@ services:
       - key: X_AI_REPLY_APPROVED
         value: "true"
       - key: MAX_REPLIES_PER_DAY
-        value: "10"
+        value: "unlimited"
       - key: POLL_SECONDS
         value: "60"
       - key: XAI_MODEL

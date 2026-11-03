@@ -203,6 +203,17 @@ class BotTests(unittest.TestCase):
             self.assertEqual(error.exception.reason, 'mentions_not_allowed')
         self.assertEqual(req.call_count, 2)
 
+    def test_unlimited_replies_ignore_daily_usage(self):
+        p = post(); self.add(p)
+        self.db.execute("INSERT INTO jobs(id,author,payload,status,updated) VALUES(?,?,?,?,?)",
+                        ('9', 'other', '{}', 'sent', __import__('time').time()))
+        self.db.commit()
+        x = FakeX({'10': p})
+        with patch.dict('os.environ', {'MAX_REPLIES_PER_DAY': 'unlimited'}):
+            bot.process(self.db, x, 'bot', 'grook', True, lambda *_: 'Answer.')
+        self.assertEqual(self.state(), 'sent')
+        self.assertEqual(x.sent, [('10', 'Answer.')])
+
     def test_long_post_text(self):
         self.assertEqual(bot.text_of({'text': 'short', 'note_tweet': {'text': 'full'}}), 'full')
 
